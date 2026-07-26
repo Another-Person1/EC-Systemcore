@@ -1,10 +1,31 @@
 #!/bin/sh
-set -e
+set -eu
 
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl stop ec-systemcore.service || true
-  systemctl disable ec-systemcore.service || true
-  systemctl daemon-reload || true
-fi
+PACKAGE_ROOT="${EC_SYSTEMCORE_MAINTAINER_TEST_ROOT:-}"
+ACTION="${1:-remove}"
+
+systemd_is_running() {
+  if [ "${EC_SYSTEMCORE_MAINTAINER_TEST_SYSTEMD:-0}" = "1" ]; then
+    return 0
+  fi
+  [ -z "${PACKAGE_ROOT}" ] && [ -d /run/systemd/system ]
+}
+
+case "${ACTION}" in
+  upgrade|failed-upgrade)
+    # Leave active services running until postinst can atomically try-restart
+    # them, and preserve an administrator's enabled/disabled state.
+    ;;
+  remove|deconfigure|purge)
+    if systemd_is_running; then
+      systemctl stop ec-systemcore-configuration.service ec-systemcore.service
+      systemctl disable ec-systemcore-configuration.service ec-systemcore.service
+    fi
+    ;;
+  *)
+    echo "error: unsupported prerm action '${ACTION}'" >&2
+    exit 1
+    ;;
+esac
 
 exit 0

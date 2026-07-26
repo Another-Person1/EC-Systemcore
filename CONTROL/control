@@ -1,8 +1,9 @@
 Package: ec-systemcore
-Version: v2026.0.1
+Version: @EC_SYSTEMCORE_VERSION@
 Architecture: arm64
 Maintainer: ec-systemcore maintainers
-Depends: systemd, bun
+Depends: systemd
 Section: net
 Priority: optional
-Description: ec-systemcore EtherCAT MainDevice daemon and dashboard for Limelight SystemCore ARM64 systems.
+License: GPL-3.0-only AND LicenseRef-Bun-1.3.14-Binary
+Description: EtherCAT MainDevice daemon, client API, and local configuration for ARM64 robot control systems.

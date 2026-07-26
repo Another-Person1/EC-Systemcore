@@ -1672,6 +1672,11 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int ti
       {
          mbxro = slavelist->mbx_ro;
          mbxin = ecx_getmbx(context);
+         if (mbxin == NULL)
+         {
+            *mbx = NULL;
+            return 0;
+         }
          mbxh = (ec_mbxheadert *)mbxin;
          do
          {

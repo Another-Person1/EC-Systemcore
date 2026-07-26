@@ -320,6 +320,14 @@ dialog::backdrop { background: rgb(2 6 23 / 0.72); backdrop-filter: blur(2px); }
   color: rgb(226 232 240);
   padding: 0.5rem 0.65rem;
 }
+.config-json-editor {
+  min-height: 28rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  tab-size: 2;
+}
 .toggle-row {
   display: flex;
   align-items: center;

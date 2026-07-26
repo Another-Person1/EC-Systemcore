@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+PACKAGE_ROOT="${EC_SYSTEMCORE_MAINTAINER_TEST_ROOT:-}"
+ACTION="${1:-remove}"
+STATE_DIR="${PACKAGE_ROOT}/var/lib/ec-systemcore"
+INSTALL_MARKER="${STATE_DIR}/installed"
+
+systemd_is_running() {
+  if [ "${EC_SYSTEMCORE_MAINTAINER_TEST_SYSTEMD:-0}" = "1" ]; then
+    return 0
+  fi
+  [ -z "${PACKAGE_ROOT}" ] && [ -d /run/systemd/system ]
+}
+
+case "${ACTION}" in
+  upgrade|failed-upgrade|abort-install|abort-upgrade)
+    ;;
+  remove|purge)
+    if [ -L "${STATE_DIR}" ] || [ -L "${INSTALL_MARKER}" ]; then
+      echo "error: refusing symbolic-link package lifecycle path" >&2
+      exit 1
+    fi
+    rm -f "${INSTALL_MARKER}"
+    rmdir "${STATE_DIR}" 2>/dev/null || true
+    if systemd_is_running; then
+      systemctl daemon-reload
+    fi
+    ;;
+  *)
+    echo "error: unsupported postrm action '${ACTION}'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

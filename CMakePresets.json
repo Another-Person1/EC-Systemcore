@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-arm64",
+      "displayName": "ec-systemcore Linux ARM64 production build",
+      "description": "C++23 Debian Bookworm ARM64 build for the CM5 robot-control target.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-aarch64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "/usr",
+        "BUILD_SHARED_LIBS": "OFF",
+        "BUILD_TESTING": "ON",
+        "EC_SYSTEMCORE_BUILD_CONFIGURATION": "ON",
+        "EC_SYSTEMCORE_BUN_ARM64_EXECUTABLE": "/opt/ec-systemcore-target-runtime/bun",
+        "EC_SYSTEMCORE_BUN_ARM64_SHA256_FILE": "/opt/ec-systemcore-target-runtime/bun.sha256",
+        "EC_SYSTEMCORE_BUN_ARM64_PROVENANCE_FILE": "/opt/ec-systemcore-target-runtime/bun-provenance.json",
+        "EC_SYSTEMCORE_ENABLE_HARDENING": "ON",
+        "EC_SYSTEMCORE_ENABLE_IPO": "ON",
+        "EC_SYSTEMCORE_WARNINGS_AS_ERRORS": "ON",
+        "EC_SYSTEMCORE_FULLY_STATIC": "OFF"
+      },
+      "environment": {
+        "SOURCE_DATE_EPOCH": "$penv{SOURCE_DATE_EPOCH}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-arm64",
+      "configurePreset": "linux-arm64",
+      "jobs": 2
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-arm64",
+      "configurePreset": "linux-arm64",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

@@ -1,86 +1,99 @@
-# ec-systemcore EtherCAT MainDevice Daemon
+# ec-systemcore daemon configuration reference
 
-This directory contains a C++17 ARM64 Linux daemon for Limelight Systemcore hardware. It runs SOEM as an EtherCAT MainDevice, reports NT4 telemetry under the `ec-systemcore` table, and records WPILog events for AdvantageScope.
+The C++23 ARM64 daemon runs one independent SOEM MainDevice lifecycle per
+enabled interface mapping and exposes ECSC v1 only through the local Unix
+socket. It has no NetworkTables, HTTP, or robot-language runtime dependency.
 
-## Build
-
-```sh
-cmake -S daemon -B build/daemon -DLIMELIGHT_EC_WITH_WPILIB=ON
-cmake --build build/daemon
-```
-
-The default CMake path selects `aarch64-linux-gnu-gcc` and `aarch64-linux-gnu-g++` when configured from a non-ARM64 host. Use `-DCMAKE_TOOLCHAIN_FILE=...` to provide a site-specific toolchain instead.
-
-For local syntax checks on machines without WPILib libraries:
+Build and validate it with the repository's canonical pinned toolchain:
 
 ```sh
-cmake -S daemon -B build/daemon-local -DLIMELIGHT_EC_WITH_WPILIB=OFF
+cmake --preset linux-arm64
+cmake --build --preset linux-arm64
+ctest --preset linux-arm64
 ```
 
-## Configuration
+## Configuration lifecycle
 
-Install the JSON configuration at:
+The strict JSON file is `/etc/ec-systemcore/ec-systemcore.json`. It is bounded
+to 1 MiB, nesting depth 32, and 8192 nodes. Duplicate, unknown, mistyped,
+out-of-range, and obsolete keys are rejected. A change advances the safety
+epoch, zeros outputs, and exits with the temporary-failure code so systemd
+restarts the daemon into the new configuration.
 
-```text
-/etc/ethercat/ec-configuration.json
-```
+The complete root schema is:
 
-The dashboard-compatible schema is:
+| Field | Contract |
+| --- | --- |
+| `allow_restricted_interfaces` | Boolean; required opt-in before using `eth0`, `wlan0`, `usb0`, or `lo`. |
+| `cycle_period_us` | Integer 5,000–1,000,000. |
+| `heartbeat_timeout_ms` | Integer 100–5,000. |
+| `output_command_timeout_ms` | Integer 20–heartbeat timeout and at least two cycle periods. |
+| `log_directory` | Fixed at `/var/log/ec-systemcore`. |
+| `log_count_limit` | Integer 1–1,000. |
+| `free_space_threshold_mb` | Integer 0–1,048,576. |
+| `realtime_memory_lock` | Optional boolean request; failure is reported, not fatal. |
+| `realtime_fifo` | Optional boolean request; failure falls back to `SCHED_OTHER`. |
+| `realtime_priority` | Optional signed 32-bit FIFO priority request. |
+| `realtime_cpu` | Optional unsigned CPU index request. |
+| `controller_group` | Linux group name, default `ec-systemcore-controller`. |
+| `controller_uids` / `controller_gids` | Up to 64 unique numeric peer IDs each. |
+| `interface_mappings` | Required array of at most eight mappings. |
 
-```json
-{
-  "allow_restricted_interfaces": false,
-  "log_directory": "/var/log/ethercat",
-  "log_count_limit": 10,
-  "free_space_threshold_mb": 50,
-  "interface_mappings": [
-    {
-      "logical_name": "LED_Trunk",
-      "physical_interface": "eth1"
-    }
-  ]
-}
-```
+An interface mapping contains:
 
-Each entry maps a logical name such as `LED_Trunk` to a physical Linux interface such as `eth1`. Logs and NT4 values use the logical name. Interfaces `eth0`, `wlan0`, and `usb0` are blocked unless `allow_restricted_interfaces` is set to `true`. When the config file changes, the daemon exits cleanly so systemd can restart it with the new settings.
+| Field | Contract |
+| --- | --- |
+| `logical_name` | Unique 1–32 character `[A-Za-z0-9_-]+` name. |
+| `physical_interface` | Unique Linux interface name, at most 15 characters. |
+| `enabled` | Boolean; defaults true. Disabled entries are retained but not opened. |
+| `maximum_io_map_bytes` | 1,024–1,048,576; defaults 262,144. |
+| `distributed_clock` | Request EtherCAT distributed-clock synchronization. |
+| `distributed_clock_shift_ns` | Signed 32-bit phase shift. |
+| `allow_unverified_topology` | Allows input-only discovery; all outputs remain disabled. |
+| `lock` | Persistent adapter identity described below. |
+| `expected_subdevices` | Ordered array of at most 199 topology entries. |
 
-## IPC Packet
+Each expected SubDevice requires unsigned 32-bit `vendor_id` and
+`product_code`; `revision`, `input_bytes`, and `output_bytes` are optional
+unsigned 32-bit values. Every mapped PDO direction must specify its exact byte
+size. `output_bytes` is capped at 1,024, matching one atomic output-write
+command.
 
-The Unix domain socket is:
+For any output-capable bus, an exact ordered `expected_subdevices` topology is
+required before output enable can succeed. The daemon logs discovered
+vendor/product/revision/PDO values for operator review. It does not
+automatically adopt those values. `allow_unverified_topology` is an input-only
+commissioning mode and stores zero output sizes.
 
-```text
-/var/run/ec-systemcore.sock
-```
+## Adapter lock schema
 
-It uses `SOCK_SEQPACKET`, non-blocking mode, and broadcasts this exact 128-byte packed status packet every 200 ms:
+`lock.id_path` is required and is resolved from udev/sysfs physical path.
+`permanent_mac`, `usb_serial`, `usb_vendor_id`, and `usb_product_id` are
+optional additional checks. Path-only identities are valid for adapters that
+do not expose a permanent MAC. Broadcast/multicast MACs, malformed USB IDs,
+control characters, excessive lengths, and contradictory identities are
+rejected.
 
-```cpp
-struct [[gnu::packed]] MainDeviceStatus {
-  uint8_t  daemon_status;
-  uint8_t  maindevice_state;
-  uint8_t  active_adapters;
-  uint8_t  subdevice_count;
-  uint16_t active_faults;
-  uint16_t maindevice_jitter_us;
-  uint32_t lost_frames;
-  char     interface_name[16];
-  char     logical_name[16];
-  uint8_t  reserved[84];
-};
-```
+A configured lock is independent of transient names such as `eth1`. Missing,
+ambiguous, or mismatched identity keeps the bus out of operation and outputs
+disabled. Reconnecting the matching adapter is detected by periodic scan and
+automatically starts reinitialization. Persistent lock/unlock is performed in
+Configuration & Diagnostics; the controller IPC also supports an explicit
+runtime-only unlock for recovery.
 
-Incoming dashboard commands must be exactly this 64-byte packed packet:
+## Standard-kernel and recovery behavior
 
-```cpp
-struct [[gnu::packed]] SubDeviceCommand {
-  uint8_t  command_type;
-  uint8_t  target_subdevice;
-  uint8_t  target_port;
-  uint8_t  payload_length;
-  uint8_t  payload_data[60];
-};
-```
+PREEMPT_RT is optional. At startup each bus attempts requested memory lock,
+affinity, and FIFO policy. Any unavailable feature is exposed through
+scheduling mode/error bits, while the cycle continues with standard monotonic
+absolute sleeps. The service-level CPU/IO weights and nice value continue to
+favor safety work even without FIFO scheduling.
 
-Command types `0x01` and `0x02` copy payload bytes into the process output image for operational buses. Command type `0x03` resets lost-frame counters.
+Link loss, process-data faults, distributed-clock unlock, adapter changes, and
+initialization failure close the SOEM context and retry automatically. Output
+permission is revoked before retry. After reinitialization, a new safety epoch
+requires a fresh controller grant, explicit output enable, and fresh complete
+output images.
 
-WPILog files are written under `log_directory` using `ec_log_YYYYMMDD_HHMMSS.wpilog`.
+Events are bounded, rotated `ec-systemcore-*.log` files under the fixed log
+directory. Configuration & Diagnostics can view/download them read-only.

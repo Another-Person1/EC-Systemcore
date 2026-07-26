@@ -1,10 +1,195 @@
 #!/bin/sh
-set -e
+set -eu
 
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload || true
-  systemctl enable ec-systemcore.service || true
-  systemctl restart ec-systemcore.service || systemctl start ec-systemcore.service || true
+PACKAGE_ROOT="${EC_SYSTEMCORE_MAINTAINER_TEST_ROOT:-}"
+
+root_path() {
+  printf '%s%s\n' "${PACKAGE_ROOT}" "$1"
+}
+
+systemd_is_running() {
+  if [ "${EC_SYSTEMCORE_MAINTAINER_TEST_SYSTEMD:-0}" = "1" ]; then
+    return 0
+  fi
+  [ -z "${PACKAGE_ROOT}" ] && [ -d /run/systemd/system ]
+}
+
+ensure_group() {
+  group_name="$1"
+  if command -v getent >/dev/null 2>&1 &&
+      getent group "${group_name}" >/dev/null 2>&1; then
+    return
+  fi
+  if [ -r /etc/group ] &&
+      grep -q "^${group_name}:" /etc/group; then
+    return
+  fi
+  if command -v groupadd >/dev/null 2>&1; then
+    groupadd --system "${group_name}"
+  elif command -v addgroup >/dev/null 2>&1; then
+    addgroup -S "${group_name}"
+  else
+    echo "error: groupadd or addgroup is required" >&2
+    exit 1
+  fi
+}
+
+ensure_user() {
+  user_name="$1"
+  primary_group="$2"
+  if id -u "${user_name}" >/dev/null 2>&1; then
+    return
+  fi
+  no_login="$(command -v nologin 2>/dev/null || printf '/bin/false')"
+  if command -v useradd >/dev/null 2>&1; then
+    useradd --system --gid "${primary_group}" --groups ec-systemcore \
+      --home-dir /nonexistent \
+      --shell "${no_login}" "${user_name}"
+  elif command -v adduser >/dev/null 2>&1; then
+    adduser -S -D -H -G "${primary_group}" -s "${no_login}" "${user_name}"
+    addgroup "${user_name}" ec-systemcore
+  else
+    echo "error: useradd or adduser is required" >&2
+    exit 1
+  fi
+}
+
+user_in_group() {
+  id -Gn "$1" |
+    tr ' ' '\n' |
+    grep -qx "$2"
+}
+
+repair_service_user_groups() {
+  user_name="$1"
+  primary_group="$2"
+  supplementary_group="$3"
+
+  if [ "$(id -gn "${user_name}")" != "${primary_group}" ]; then
+    if command -v usermod >/dev/null 2>&1; then
+      usermod --gid "${primary_group}" "${user_name}"
+    else
+      echo "error: usermod is required to repair ${user_name}'s primary group" >&2
+      exit 1
+    fi
+  fi
+
+  if ! user_in_group "${user_name}" "${supplementary_group}"; then
+    if command -v usermod >/dev/null 2>&1; then
+      usermod --append --groups "${supplementary_group}" "${user_name}"
+    elif command -v addgroup >/dev/null 2>&1; then
+      addgroup "${user_name}" "${supplementary_group}"
+    else
+      echo "error: usermod or addgroup is required to repair ${user_name}" >&2
+      exit 1
+    fi
+  fi
+
+  if [ "$(id -gn "${user_name}")" != "${primary_group}" ] ||
+      ! user_in_group "${user_name}" "${supplementary_group}"; then
+    echo "error: unable to establish safe groups for ${user_name}" >&2
+    exit 1
+  fi
+}
+
+remove_user_from_group() {
+  user_name="$1"
+  group_name="$2"
+  if ! user_in_group "${user_name}" "${group_name}"; then
+    return
+  fi
+  if [ "$(id -gn "${user_name}")" = "${group_name}" ]; then
+    echo "error: refusing to remove primary group ${group_name} from ${user_name}" >&2
+    exit 1
+  fi
+  if command -v gpasswd >/dev/null 2>&1; then
+    gpasswd -d "${user_name}" "${group_name}" >/dev/null
+  elif command -v deluser >/dev/null 2>&1; then
+    deluser "${user_name}" "${group_name}"
+  elif command -v delgroup >/dev/null 2>&1; then
+    delgroup "${user_name}" "${group_name}"
+  else
+    echo "error: gpasswd, deluser, or delgroup is required to repair ${user_name}" >&2
+    exit 1
+  fi
+  if user_in_group "${user_name}" "${group_name}"; then
+    echo "error: unable to remove ${user_name} from ${group_name}" >&2
+    exit 1
+  fi
+}
+
+config_dir="$(root_path /etc/ec-systemcore)"
+config_file="${config_dir}/ec-systemcore.json"
+log_dir="$(root_path /var/log/ec-systemcore)"
+runtime_dir="$(root_path /run/ec-systemcore)"
+state_dir="$(root_path /var/lib/ec-systemcore)"
+install_marker="${state_dir}/installed"
+
+for managed_path in "${config_dir}" "${log_dir}" "${runtime_dir}" \
+                    "${state_dir}" "${config_file}" "${install_marker}"; do
+  if [ -L "${managed_path}" ]; then
+    echo "error: refusing symbolic-link package path ${managed_path}" >&2
+    exit 1
+  fi
+done
+[ -f "${config_file}" ] || {
+  echo "error: installed configuration is not a regular file" >&2
+  exit 1
+}
+
+fresh_install=true
+if [ -f "${install_marker}" ] || [ -n "${2:-}" ]; then
+  fresh_install=false
 fi
 
+if [ -n "${PACKAGE_ROOT}" ]; then
+  install -d -m 2770 "${config_dir}"
+  install -d -m 0750 "${log_dir}" "${runtime_dir}"
+  install -d -m 0750 "${state_dir}"
+  chmod 0660 "${config_file}"
+else
+  ensure_group ec-systemcore
+  ensure_group ec-systemcore-observer
+  ensure_group ec-systemcore-controller
+  ensure_user ec-systemcore ec-systemcore-observer
+  ensure_user ec-systemcore-configuration ec-systemcore-observer
+
+  if [ "$(id -u ec-systemcore)" = "0" ] ||
+      [ "$(id -u ec-systemcore-configuration)" = "0" ] ||
+      [ "$(id -u ec-systemcore)" = "$(id -u ec-systemcore-configuration)" ]; then
+    echo "error: service accounts require distinct non-root identities" >&2
+    exit 1
+  fi
+
+  repair_service_user_groups \
+    ec-systemcore ec-systemcore-observer ec-systemcore
+  repair_service_user_groups \
+    ec-systemcore-configuration ec-systemcore-observer ec-systemcore
+  remove_user_from_group \
+    ec-systemcore-configuration ec-systemcore-controller
+
+  # setgid keeps configuration atomic replacements in the private configuration
+  # group instead of its observer primary group.
+  install -d -m 2770 -o root -g ec-systemcore "${config_dir}"
+  install -d -m 0750 -o ec-systemcore -g ec-systemcore-observer \
+    "${log_dir}" "${runtime_dir}"
+  install -d -m 0750 -o root -g root "${state_dir}"
+  chown root:ec-systemcore "${config_file}"
+  chmod 0660 "${config_file}"
+fi
+install -m 0600 /dev/null "${install_marker}"
+
+if systemd_is_running; then
+  systemctl daemon-reload
+  if [ "${fresh_install}" = "true" ]; then
+    systemctl enable ec-systemcore.service ec-systemcore-configuration.service
+    systemctl start ec-systemcore.service ec-systemcore-configuration.service
+  else
+    # Preserve an administrator's enabled/disabled state on upgrade.
+    systemctl try-restart ec-systemcore.service ec-systemcore-configuration.service
+  fi
+fi
+
+echo "ec-systemcore installed with fail-safe empty-bus defaults."
+echo "Configuration & Diagnostics is available on the isolated robot LAN at port 8080."
 exit 0

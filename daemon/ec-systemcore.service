@@ -1,21 +1,60 @@
 [Unit]
-Description=ec-systemcore EtherCAT MainDevice Daemon
-After=network-online.target
-Wants=network-online.target
+Description=ec-systemcore EtherCAT MainDevice daemon
+Documentation=file:/usr/share/doc/ec-systemcore/README.md
+After=network-pre.target
+Wants=network-pre.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+User=ec-systemcore
+Group=ec-systemcore-observer
+SupplementaryGroups=ec-systemcore
 ExecStart=/usr/bin/ec-systemcore-daemon
 Restart=always
-RestartSec=2
-User=root
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_NICE CAP_IPC_LOCK
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_NICE CAP_IPC_LOCK
+RestartSec=2s
+UMask=0027
+# Preserve cycle, heartbeat, and fail-safe work under configuration/log load,
+# including on standard kernels where FIFO scheduling cannot be applied.
+Nice=-5
+CPUWeight=1000
+IOWeight=1000
+
+RuntimeDirectory=ec-systemcore
+RuntimeDirectoryMode=0750
+LogsDirectory=ec-systemcore
+LogsDirectoryMode=0750
+ReadOnlyPaths=/etc/ec-systemcore /sys/class/net -/run/udev/data
+ReadWritePaths=/run/ec-systemcore /var/log/ec-systemcore
+
+# Raw EtherCAT frames need CAP_NET_RAW. The other two capabilities only improve
+# optional real-time scheduling and memory locking; the daemon safely remains
+# SCHED_OTHER when the host kernel or container does not grant them.
+AmbientCapabilities=CAP_NET_RAW CAP_SYS_NICE CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_NICE CAP_IPC_LOCK
+LimitRTPRIO=55
+LimitMEMLOCK=infinity
 NoNewPrivileges=true
+
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
 ProtectHome=true
-ProtectSystem=full
-ReadWritePaths=/var/log/ethercat /run /var/run
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_PACKET AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

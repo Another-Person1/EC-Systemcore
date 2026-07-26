@@ -1,0 +1,60 @@
+[Unit]
+Description=ec-systemcore Configuration & Diagnostics
+Documentation=file:/usr/share/doc/ec-systemcore/README.md
+After=network.target ec-systemcore.service
+Wants=ec-systemcore.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ec-systemcore-configuration
+Group=ec-systemcore-observer
+SupplementaryGroups=ec-systemcore
+ExecStart=/usr/lib/ec-systemcore/runtime/bun /usr/lib/ec-systemcore/configuration/server.js
+WorkingDirectory=/usr/lib/ec-systemcore/configuration
+Restart=always
+RestartSec=2s
+UMask=0027
+# Keep configuration and diagnostic work responsive without allowing large
+# log archives or UI bursts to contend equally with robot-control work.
+Nice=10
+CPUWeight=25
+IOWeight=25
+
+# The isolated robot LAN is the trust boundary. There are no accounts,
+# passwords, cookies, or TLS settings. Optional source/Host/Origin allowlists
+# can narrow this default without adding authentication.
+Environment=EC_SYSTEMCORE_HOST=0.0.0.0
+Environment=EC_SYSTEMCORE_PORT=8080
+Environment=EC_SYSTEMCORE_CONFIG=/etc/ec-systemcore/ec-systemcore.json
+Environment=EC_SYSTEMCORE_SOCKET=/run/ec-systemcore/ec-systemcore.sock
+Environment=EC_SYSTEMCORE_LOG_ROOT=/var/log/ec-systemcore
+
+ReadWritePaths=/etc/ec-systemcore
+ReadOnlyPaths=/run/ec-systemcore /var/log/ec-systemcore -/run/udev/data /sys/class/net /proc/cpuinfo /proc/meminfo
+NoNewPrivileges=true
+CapabilityBoundingSet=
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+LockPersonality=true
+# Bun uses JavaScriptCore JIT executable mappings. MemoryDenyWriteExecute is
+# incompatible with that runtime; the remaining filesystem, identity, network,
+# syscall, namespace, and capability boundaries remain enforced.
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

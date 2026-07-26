@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ec-systemcore Configuration</title>
+    <link rel="stylesheet" href="/tailwind.css" />
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-100">
+    <div id="toast" class="fixed top-4 right-4 z-50 hidden rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg" role="status"></div>
+
+    <header class="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
+      <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
+        <div class="flex min-w-0 items-center gap-3">
+          <h1 class="truncate text-lg font-semibold tracking-normal">ec-systemcore Configuration</h1>
+        </div>
+        <div class="hidden flex-wrap items-center justify-center gap-3 md:flex" id="statusDots"></div>
+        <div id="jitterIndicator" class="rounded border border-slate-700 px-3 py-1 text-sm font-semibold text-slate-300">Jitter unavailable</div>
+      </div>
+      <nav class="mx-auto flex max-w-7xl gap-1 px-4 pb-3" aria-label="Main views">
+        <button class="tab-button active" data-tab="topology" type="button">Topology</button>
+        <button class="tab-button" data-tab="logs" type="button">Logs</button>
+        <button class="tab-button" data-tab="settings" type="button">Settings</button>
+      </nav>
+    </header>
+
+    <div id="readOnlyBanner" class="global-warning hidden">
+      Read-only mode: this direct network bind has not opted into trusted management changes.
+    </div>
+    <div id="globalFailsafeBanner" class="global-warning hidden">
+      The daemon configuration was unavailable. A preserved backup or explicit defaults may require attention.
+    </div>
+
+    <main class="mx-auto max-w-7xl px-4 py-4">
+      <section id="topologyView" class="view-block">
+        <div class="section-head">
+          <div>
+            <h2 class="section-title">EtherCAT topology</h2>
+            <p class="section-note">Daemon-reported bus aggregates. Individual device health is shown only when the IPC protocol reports it.</p>
+          </div>
+          <button id="refreshTopology" class="btn-secondary" type="button">Refresh</button>
+        </div>
+        <div id="topologyMap" class="topology-map"></div>
+      </section>
+
+      <section id="logsView" class="view-block hidden">
+        <div class="grid min-h-[68vh] gap-4 lg:grid-cols-[320px_1fr]">
+          <aside class="panel flex min-h-[420px] flex-col">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-base font-semibold">Log files</h2>
+              <button id="refreshLogs" class="icon-button" type="button" title="Refresh logs">↻</button>
+            </div>
+            <p class="section-note mb-2">Daemon <code>.log</code> files can stream as text. Client-provided <code>.wpilog</code> files remain opaque and are download-only.</p>
+            <p id="liveLogNotice" class="section-note mb-3"></p>
+            <div id="logFileList" class="min-h-0 flex-1 overflow-y-auto border-y border-slate-800 py-2"></div>
+            <div class="mt-3 grid gap-2">
+              <button id="downloadSelected" class="btn-primary" type="button">Download selected</button>
+            </div>
+          </aside>
+          <section class="panel flex min-h-[420px] flex-col">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-base font-semibold">Live text console</h2>
+              <span id="socketState" class="text-xs text-slate-400">Connecting</span>
+            </div>
+            <div id="consoleOutput" class="terminal flex-1" aria-live="polite"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="settingsView" class="view-block hidden">
+        <div class="settings-shell">
+          <aside class="settings-sidebar" aria-label="Settings sections">
+            <button class="settings-nav active" data-settings-section="general" type="button">General</button>
+            <button class="settings-nav" data-settings-section="network" type="button">Network</button>
+            <button class="settings-nav" data-settings-section="devices" type="button">Buses</button>
+            <button class="settings-nav" data-settings-section="advanced" type="button">Advanced</button>
+            <button class="settings-nav" data-settings-section="about" type="button">About</button>
+          </aside>
+
+          <div class="settings-content">
+            <section id="settingsPanelGeneral" class="settings-panel">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title">Daemon configuration</h2>
+                  <p class="section-note">Validated EtherCAT timing and log settings. Saving causes a safe daemon restart.</p>
+                </div>
+              </div>
+              <div id="failsafeBanner" class="mb-4 hidden rounded border border-amber-400/50 bg-amber-400/10 p-4 text-amber-100">
+                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <strong>Configuration recovery is active.</strong>
+                  <button id="applyDefaults" class="btn-warning mutation-control" type="button">Apply explicit defaults</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label class="field-label">Cycle period (µs)<input id="cyclePeriod" class="field-input" type="number" min="5000" max="1000000" /></label>
+                <label class="field-label">Controller heartbeat timeout (ms)<input id="heartbeatTimeout" class="field-input" type="number" min="100" max="5000" /></label>
+                <label class="field-label">Output command timeout (ms)<input id="outputCommandTimeout" class="field-input" type="number" min="20" max="5000" /></label>
+                <label class="field-label">Log directory<input id="logDirectory" class="field-input" /></label>
+                <label class="field-label">Log count limit<input id="logLimit" class="field-input" type="number" min="1" max="1000" /></label>
+                <label class="field-label">Free-space threshold (MB)<input id="freeSpaceThreshold" class="field-input" type="number" min="0" max="1048576" /></label>
+                <label class="toggle-row"><input id="allowRestricted" type="checkbox" /> Allow restricted interfaces</label>
+              </div>
+              <p class="section-note mt-3">Heartbeats retain the controller lease, but they do not retain outputs. While enabled, accepted output writes must continue within the output-command timeout or the daemon zeros outputs, advances epoch, and disconnects the controller.</p>
+              <button id="saveConfig" class="btn-primary mt-4 mutation-control" type="button">Save configuration</button>
+            </section>
+
+            <section id="settingsPanelNetwork" class="settings-panel hidden">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title">Stable USB adapter locks</h2>
+                  <p class="section-note">Locks use daemon/sysfs physical identity, permanent MAC, and USB identity—not a transient interface name.</p>
+                </div>
+                <button id="rescanAdapters" class="btn-secondary mutation-control" type="button">Rescan adapters</button>
+              </div>
+              <div id="networkList" class="space-y-2"></div>
+            </section>
+
+            <section id="settingsPanelDevices" class="settings-panel hidden">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title">Daemon-reported buses</h2>
+                  <p class="section-note">Missing and mismatched locked adapters fail closed.</p>
+                </div>
+              </div>
+              <div id="subDeviceList" class="dense-list"></div>
+            </section>
+
+            <section id="settingsPanelAdvanced" class="settings-panel hidden">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title">Advanced configuration JSON</h2>
+                  <p class="section-note">Edit the complete validated daemon schema, including expected SubDevice topology, PDO sizes, distributed clocks, IO-map bounds, real-time preferences, controller IDs, and adapter locks.</p>
+                </div>
+              </div>
+              <div class="rounded border border-amber-400/40 bg-amber-400/10 p-3 text-sm text-amber-100">
+                Outputs cannot be enabled until every output-capable bus has an explicit, matching <code>expected_subdevices</code> topology with PDO byte sizes. The current IPC reports aggregate bus counts only; this editor does not auto-discover or auto-adopt individual SubDevice identity.
+              </div>
+              <label class="field-label mt-4" for="advancedConfigJson">Complete JSON document
+                <textarea id="advancedConfigJson" class="field-input config-json-editor" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+              </label>
+              <p id="advancedConfigError" class="mt-2 min-h-5 text-sm text-rose-300" role="alert" aria-live="polite"></p>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button id="applyAdvancedConfig" class="btn-primary mutation-control" type="button">Validate &amp; apply JSON</button>
+                <button id="resetAdvancedConfig" class="btn-secondary" type="button">Reload active configuration</button>
+              </div>
+            </section>
+
+            <section id="settingsPanelAbout" class="settings-panel hidden">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title">About</h2>
+                  <p class="section-note">System version and timing mode.</p>
+                </div>
+              </div>
+              <div class="grid gap-2 text-sm text-slate-300" id="aboutInfo"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="faultModal" class="modal">
+      <div class="modal-panel">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Fault counters</h2>
+          <button class="icon-button" data-close-modal type="button">×</button>
+        </div>
+        <div id="faultList" class="mt-4 dense-list"></div>
+        <button id="clearFaults" class="btn-danger mt-4 mutation-control" type="button">Clear counters</button>
+      </div>
+    </dialog>
+
+    <dialog id="adapterModal" class="modal">
+      <div class="modal-panel">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Adapter identity</h2>
+          <button class="icon-button" data-close-modal type="button">×</button>
+        </div>
+        <div id="adapterDetails" class="mt-4 grid gap-2 text-sm"></div>
+      </div>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

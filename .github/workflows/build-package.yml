@@ -1,68 +1,147 @@
-name: Build Package
+name: ARM64 build, test, and package
 
 on:
+  pull_request:
   push:
     branches:
       - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ec-systemcore-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PKG_VERSION: v2026.0.1
+  CI_IMAGE: ec-systemcore-ci:${{ github.sha }}
 
 jobs:
-  build-ipk:
-    runs-on: ubuntu-latest
+  development:
+    name: C++23 ARM64 build and development package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - name: Check out the exact source revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          submodules: recursive
+          persist-credentials: false
+          submodules: false
 
-      - name: Install ARM64 toolchain and packaging tools
+      - name: Build the pinned ARM64 toolchain image
+        run: >-
+          docker build
+          --file .docker/linux-arm64.Dockerfile
+          --tag "${CI_IMAGE}"
+          .
+
+      - name: Validate and package the development snapshot
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils-aarch64-linux-gnu \
-            cmake \
-            ninja-build \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/ec-systemcore-ci-home \
+            --env GIT_CONFIG_COUNT=1 \
+            --env GIT_CONFIG_KEY_0=safe.directory \
+            --env GIT_CONFIG_VALUE_0=/workspace \
+            --env SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            --volume "${PWD}:/workspace" \
+            --workdir /workspace \
+            "${CI_IMAGE}" \
+            bash scripts/ci.sh development
 
-      - name: Set up opkg-utils
-        run: |
-          git clone --depth 1 https://git.yoctoproject.org/opkg-utils opkg-utils || \
-            git clone --depth 1 https://github.com/shr-project/opkg-utils.git opkg-utils
-          echo "$(pwd)/opkg-utils" >> $GITHUB_PATH
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Configure daemon
-        env:
-          CC: aarch64-linux-gnu-gcc
-          CXX: aarch64-linux-gnu-g++
-        run: |
-          cmake -S . -B build/daemon -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DLIMELIGHT_EC_WITH_WPILIB=OFF \
-            -DLIMELIGHT_EC_FULLY_STATIC=OFF
-
-      - name: Build daemon
-        run: |
-          cmake --build build/daemon --target ec-systemcore-daemon
-          aarch64-linux-gnu-readelf -h build/daemon/daemon/ec-systemcore-daemon | grep -q 'Machine:[[:space:]]*AArch64'
-
-      - name: Build IPK
-        run: |
-          test -f scripts/build_ipk.sh
-          chmod +x scripts/build_ipk.sh
-          ./scripts/build_ipk.sh
-
-      - name: Upload IPK artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload development artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ec-systemcore
-          path: dist/ec-systemcore.ipk
+          name: ec-systemcore-development-${{ github.sha }}
+          path: |
+            dist/*.ipk
+            dist/*.spdx.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Production C++23 ARM64 package
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: development
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify the release tag
+        shell: bash
+        run: |
+          [[ "${GITHUB_REF_NAME}" == "v$(< VERSION)" ]] || {
+            echo "release tag must exactly match v$(< VERSION)" >&2
+            exit 1
+          }
+
+      - name: Build the pinned ARM64 toolchain image
+        run: >-
+          docker build
+          --file .docker/linux-arm64.Dockerfile
+          --tag "${CI_IMAGE}"
+          .
+
+      - name: Validate and package the production build
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/ec-systemcore-ci-home \
+            --env GIT_CONFIG_COUNT=1 \
+            --env GIT_CONFIG_KEY_0=safe.directory \
+            --env GIT_CONFIG_VALUE_0=/workspace \
+            --env SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            --volume "${PWD}:/workspace" \
+            --workdir /workspace \
+            "${CI_IMAGE}" \
+            bash scripts/ci.sh release
+
+      - name: Resolve the exact release SBOM
+        id: release_artifacts
+        shell: bash
+        run: |
+          sbom="dist/ec-systemcore-$(< VERSION)-release-arm64.spdx.json"
+          [[ -f "${sbom}" ]] || {
+            echo "expected release SBOM is missing: ${sbom}" >&2
+            exit 1
+          }
+          echo "sbom=${sbom}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest package provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: dist/*.ipk
+
+      - name: Attest package SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: dist/*.ipk
+          sbom-path: ${{ steps.release_artifacts.outputs.sbom }}
+
+      - name: Upload production artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ec-systemcore-production-${{ github.ref_name }}
+          path: |
+            dist/*.ipk
+            dist/*.spdx.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
